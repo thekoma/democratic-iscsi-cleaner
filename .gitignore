@@ -1,0 +1,8 @@
+democratic-csi-src/
+clean_iscsi_nodes.sh
+iscsi_cleaner.py
+democratic_csi_issue_report.md
+.gemini/
+__pycache__/
+*.log
+.env

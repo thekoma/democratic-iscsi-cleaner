@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'GEMINI.md'
+      - 'deploy/**'
+      - '.gitignore'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate new tag
+        id: calculate_tag
+        run: |
+          DATE_PREFIX=$(date +'%Y%m')
+          echo "Date prefix: $DATE_PREFIX"
+          
+          # Find the latest tag matching the current month pattern
+          LATEST_TAG=$(git tag --list "${DATE_PREFIX}*" | sort -V | tail -n 1)
+          
+          if [ -z "$LATEST_TAG" ]; then
+            # No tag for this month, start with 00
+            NEW_TAG="${DATE_PREFIX}00"
+          else
+            # Extract the counter part (last 2 digits)
+            COUNTER=${LATEST_TAG: -2}
+            # Increment without leading zero interpretation issues
+            NEXT_COUNTER=$(echo "$COUNTER" | sed 's/^0*//')
+            if [ -z "$NEXT_COUNTER" ]; then NEXT_COUNTER=0; fi
+            NEXT_COUNTER=$((NEXT_COUNTER + 1))
+            
+            # Format back to 2 digits
+            PADDED_COUNTER=$(printf "%02d" "$NEXT_COUNTER")
+            NEW_TAG="${DATE_PREFIX}${PADDED_COUNTER}"
+          fi
+          
+          echo "New tag calculated: $NEW_TAG"
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.calculate_tag.outputs.new_tag }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --title "Release $TAG_NAME" \
+            --generate-notes \
+            --target main

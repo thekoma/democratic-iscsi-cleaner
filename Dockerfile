@@ -1,14 +1,9 @@
 FROM python:3.11-slim-bookworm
 
-# Enable contrib repository for zfsutils-linux
-RUN sed -i 's/main/main contrib/g' /etc/apt/sources.list.d/debian.sources
-
 # Install system dependencies
-# open-iscsi: for iscsiadm
-# zfsutils-linux: for zfs command
+# util-linux: provides nsenter
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    open-iscsi \
-    zfsutils-linux \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

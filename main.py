@@ -19,14 +19,20 @@ IQN_PREFIX = os.getenv("IQN_PREFIX", "iqn.2024-03.lan.asgard:knas")
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 # Node Name (Downward API)
 NODE_NAME = os.getenv("NODE_NAME")
+# Use nsenter to run on host
+USE_NSENTER = os.getenv("USE_NSENTER", "true").lower() == "true"
 
 def run_command(command):
     """Run a shell command and return stdout decoded."""
-    try:
-        # Check if we need sudo or if we are root (in container)
-        if os.geteuid() != 0:
-            command = "sudo " + command
+    # Prefix with nsenter if configured and running as root
+    if USE_NSENTER and os.geteuid() == 0:
+        # Check if we are already in a hostPID env (pid 1 is systemd/init of host)
+        # Usually checking /proc/1/comm being systemd is a hint, but we just assume true via config
+        command = f"nsenter -t 1 -m -u -n -i -- {command}"
+    elif os.geteuid() != 0:
+        command = "sudo " + command
             
+    try:
         result = subprocess.check_output(command, shell=True, stderr=subprocess.PIPE)
         return result.decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
@@ -106,6 +112,7 @@ def cleanup_iscsi(targets_to_remove, full_targets_list):
         target = next((t for t in full_targets_list if uuid in t), None)
         if target:
             cmd = f"iscsiadm -m node -T {target} -o delete"
+            # Note: run_command automatically adds nsenter prefix if enabled
             print(f"  -> {cmd}")
             if not DRY_RUN:
                 run_command(cmd)
@@ -117,6 +124,7 @@ def main():
     print("=========================================================================")
     print(f"Node: {NODE_NAME if NODE_NAME else 'Unknown (Not set via Downward API)'}")
     print(f"Mode: {'DRY RUN' if DRY_RUN else 'LIVE EXECUTION'}")
+    print(f"Host Access: {'ENABLED (nsenter)' if USE_NSENTER else 'DISABLED'}")
     
     # 1. Gather Facts
     iscsi_uuids, iscsi_targets = get_iscsi_nodes()

@@ -1,5 +1,8 @@
 FROM python:3.11-slim-bookworm
 
+# Enable contrib repository for zfsutils-linux
+RUN sed -i 's/main/main contrib/g' /etc/apt/sources.list.d/debian.sources
+
 # Install system dependencies
 # open-iscsi: for iscsiadm
 # zfsutils-linux: for zfs command

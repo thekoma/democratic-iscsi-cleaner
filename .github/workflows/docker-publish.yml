@@ -3,7 +3,9 @@ name: Docker Build & Publish
 on:
   push:
     branches: [ "main" ]
-    tags: [ 'v*.*.*' ]
+    tags: 
+      - 'v*.*.*'
+      - '20*' # Match date-based tags like 20260100
   pull_request:
     branches: [ "main" ]
 

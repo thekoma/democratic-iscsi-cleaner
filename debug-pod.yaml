@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: iscsi-debug
+  namespace: democratic-csi
+spec:
+  nodeName: knas.asgard.lan
+  containers:
+  - name: debug
+    image: ghcr.io/thekoma/democratic-iscsi-cleaner:latest
+    securityContext:
+      privileged: true
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: iscsi-info
+      mountPath: /etc/iscsi
+    - name: iscsi-lib
+      mountPath: /var/lib/iscsi
+    - name: dev-zfs
+      mountPath: /dev/zfs
+  volumes:
+  - name: iscsi-info
+    hostPath:
+      path: /etc/iscsi
+  - name: iscsi-lib
+    hostPath:
+      path: /var/lib/iscsi
+  - name: dev-zfs
+    hostPath:
+      path: /dev/zfs

@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: iscsi-cleaner
+  namespace: democratic-csi
+  labels:
+    app: iscsi-cleaner
+spec:
+  schedule: "0 3 * * 1" # Every Monday at 03:00 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          # IMPORTANT: Must run on the specific storage node
+          nodeName: knas.asgard.lan
+          
+          # IMPORTANT: Required to access host namespaces via nsenter
+          hostPID: true
+          
+          serviceAccountName: iscsi-cleaner-sa
+          containers:
+          - name: cleaner
+            image: ghcr.io/thekoma/democratic-iscsi-cleaner:latest
+            imagePullPolicy: Always
+            securityContext:
+              privileged: true # Required for nsenter
+            env:
+            - name: ZFS_PARENT_DATASET
+              value: "data/csi/iscsi"
+            - name: IQN_PREFIX
+              value: "iqn.2024-03.lan.asgard:knas"
+            - name: DRY_RUN
+              value: "false" # Set to false to actually perform cleanup
+            - name: USE_NSENTER
+              value: "true"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          restartPolicy: Never

@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: iscsi-cleaner-sa
+  namespace: democratic-csi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: iscsi-cleaner-cr
+rules:
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: iscsi-cleaner-crb
+subjects:
+- kind: ServiceAccount
+  name: iscsi-cleaner-sa
+  namespace: democratic-csi
+roleRef:
+  kind: ClusterRole
+  name: iscsi-cleaner-cr
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iscsi-cleaner-test-nsenter
+  namespace: democratic-csi
+spec:
+  template:
+    spec:
+      nodeName: knas.asgard.lan
+      hostPID: true
+      serviceAccountName: iscsi-cleaner-sa
+      containers:
+      - name: cleaner
+        image: ghcr.io/thekoma/democratic-iscsi-cleaner:latest
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+        env:
+        - name: ZFS_PARENT_DATASET
+          value: "data/csi/iscsi"
+        - name: IQN_PREFIX
+          value: "iqn.2024-03.lan.asgard:knas"
+        - name: DRY_RUN
+          value: "true"
+        - name: USE_NSENTER
+          value: "true"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+      restartPolicy: Never
+  backoffLimit: 0

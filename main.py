@@ -111,11 +111,17 @@ def cleanup_iscsi(targets_to_remove, full_targets_list):
         # Find full IQN
         target = next((t for t in full_targets_list if uuid in t), None)
         if target:
-            cmd = f"iscsiadm -m node -T {target} -o delete"
+            logout_cmd = f"iscsiadm -m node -T {target} -u"
+            delete_cmd = f"iscsiadm -m node -T {target} -o delete"
+            
             # Note: run_command automatically adds nsenter prefix if enabled
-            print(f"  -> {cmd}")
+            print(f"  -> {logout_cmd}")
+            print(f"  -> {delete_cmd}")
+            
             if not DRY_RUN:
-                run_command(cmd)
+                # Try to logout first. If it fails (e.g. already logged out), we proceed to delete anyway
+                run_command(logout_cmd)
+                run_command(delete_cmd)
             else:
                 print("     (Dry Run: skipped)")
 

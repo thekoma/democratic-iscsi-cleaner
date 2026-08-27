@@ -50,7 +50,7 @@ DESTRUCTIVE = []
 
 
 def install_fakes(mod, *, sessions, node_records, zfs, lio, pvs, attached, mounts,
-                  zfs_fails=False, k8s_fails=False):
+                  zfs_fails=False, k8s_fails=False, age_minutes=600):
     def fake_run(command, check=True, allow_empty_rc=()):
         DESTRUCTIVE.extend([command] if ("-o delete" in command or " -u" in command) else [])
         if command.startswith("zfs list"):
@@ -59,6 +59,11 @@ def install_fakes(mod, *, sessions, node_records, zfs, lio, pvs, attached, mount
                     raise mod.GatherError("nsenter: failed to execute zfs: No such file or directory")
                 return None
             return "\n".join(f"data/csi/iscsi/{u}" for u in zfs)
+        if command.startswith("journalctl") or command.startswith("stat -c"):
+            if age_minutes is None:
+                return ""
+            import time
+            return str(time.time() - age_minutes * 60)
         if command.startswith("iscsiadm -m session -P3"):
             return ""
         if command.startswith("iscsiadm -m session"):
@@ -209,6 +214,30 @@ install_fakes(m, sessions=ACTIVE, node_records=ACTIVE, zfs=ACTIVE, lio=[],
 rc = m.main()
 check("empty LIO: aborts non-zero", rc == 1, f"rc={rc}")
 check("empty LIO: NO destructive command", not DESTRUCTIVE, f"{len(DESTRUCTIVE)} cmds")
+
+# ---------------------------------------------------------------- TEST 11
+# Age gate: a freshly-unreferenced target is mid-convergence, not an orphan.
+print("\n=== TEST 11: orphan-looking target that is only 2 minutes old ===")
+DESTRUCTIVE.clear()
+m = load_main(dict(BASE_ENV, DRY_RUN="false", MIN_AGE_MINUTES="10"))
+install_fakes(m, sessions=ACTIVE + [ORPHAN], node_records=ACTIVE + [ORPHAN],
+              zfs=ACTIVE, lio=ACTIVE, pvs=ACTIVE, attached=ACTIVE, mounts=[],
+              age_minutes=2)
+rc = m.main()
+check("too recent: exits 0", rc == 0, f"rc={rc}")
+check("too recent: NOT deleted", not DESTRUCTIVE, f"{len(DESTRUCTIVE)} cmds")
+
+# ---------------------------------------------------------------- TEST 12
+# Age unknown must be treated as too young, never as old enough.
+print("\n=== TEST 12: target whose age cannot be determined ===")
+DESTRUCTIVE.clear()
+m = load_main(dict(BASE_ENV, DRY_RUN="false", MIN_AGE_MINUTES="10"))
+install_fakes(m, sessions=ACTIVE + [ORPHAN], node_records=ACTIVE + [ORPHAN],
+              zfs=ACTIVE, lio=ACTIVE, pvs=ACTIVE, attached=ACTIVE, mounts=[],
+              age_minutes=None)
+rc = m.main()
+check("unknown age: exits 0", rc == 0, f"rc={rc}")
+check("unknown age: NOT deleted", not DESTRUCTIVE, f"{len(DESTRUCTIVE)} cmds")
 
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 62)

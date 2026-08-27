@@ -51,6 +51,9 @@ def fake_run(command, check=True, allow_empty_rc=()):
     if "-o delete" in command or command.endswith(" -u"):
         CALLS.append(command)
         return ""
+    if command.startswith("journalctl") or command.startswith("stat -c"):
+        import time
+        return str(time.time() - 24*3600)  # everything is a day old
     if command.startswith("zfs list"):
         return zfs_raw
     if command.startswith("iscsiadm -m session -P3"):

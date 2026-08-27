@@ -196,14 +196,18 @@ def get_mounted_uuids():
 
 
 def get_session_devices(iqn):
-    """SCSI devices backing a session, to double-check nothing is mounted."""
-    raw = run(f"iscsiadm -m session -P3", check=False, allow_empty_rc=(21,)) or ""
-    devices, current, capture = [], None, False
+    """SCSI devices backing a session, to double-check nothing is mounted.
+
+    A failure here is NOT benign: an empty device list would make the
+    mounted-device guard pass vacuously. Propagate it.
+    """
+    raw = run("iscsiadm -m session -P3", allow_empty_rc=(21,)) or ""
+    devices, capture = [], False
     for line in raw.splitlines():
         s = line.strip()
         if s.startswith("Target:"):
-            current = s.split()[1] if len(s.split()) > 1 else None
-            capture = current == iqn
+            parts = s.split()
+            capture = len(parts) > 1 and parts[1] == iqn
         elif capture and "Attached scsi disk" in s:
             parts = s.split()
             if len(parts) >= 4:
@@ -211,18 +215,70 @@ def get_session_devices(iqn):
     return devices
 
 
+def get_target_failure_age_minutes(uuid, iqn):
+    """How long this target has been failing / sitting unused, in minutes.
+
+    Returns None when the age cannot be established — callers must then treat
+    the target as too young to touch, never as old enough.
+
+    Two independent sources:
+      1. the kernel log: first 'Unable to locate Target IQN' for this uuid;
+      2. the on-disk node record mtime (covers orphans with no live session,
+         which therefore produce no kernel errors).
+    """
+    now = datetime.now(timezone.utc).timestamp()
+    ages = []
+
+    first = run(
+        f"journalctl -k -o short-unix --no-pager --grep '{uuid}' | head -1",
+        check=False, allow_empty_rc=(1,),
+    )
+    if first:
+        try:
+            ages.append((now - float(first.split()[0])) / 60.0)
+        except (ValueError, IndexError):
+            pass
+
+    mtime = run(
+        f"stat -c %Y /var/lib/iscsi/nodes/{iqn}/*  2>/dev/null | sort -n | head -1",
+        check=False, allow_empty_rc=(1,),
+    )
+    if mtime:
+        try:
+            ages.append((now - float(mtime.strip())) / 60.0)
+        except ValueError:
+            pass
+
+    return max(ages) if ages else None
+
+
 # --------------------------------------------------------------------------
 # Reconciliation
 # --------------------------------------------------------------------------
 
 def cleanup(iqn, has_session):
+    """Remove one orphaned target. Returns True on success, False otherwise.
+
+    Unexpected failures are surfaced, never swallowed: reporting a successful
+    cleanup while the target is still there would hide a recurring problem.
+    """
+    ok = True
     if has_session:
         log(f"     logout: iscsiadm -m node -T {iqn} -u")
         if not DRY_RUN:
-            run(f"iscsiadm -m node -T {iqn} -u", check=False, allow_empty_rc=(21, 15, 2))
+            try:
+                run(f"iscsiadm -m node -T {iqn} -u", allow_empty_rc=(21, 15, 2))
+            except GatherError as e:
+                log(f"     [WARN] logout failed: {e}")
+                ok = False
     log(f"     delete: iscsiadm -m node -T {iqn} -o delete")
     if not DRY_RUN:
-        run(f"iscsiadm -m node -T {iqn} -o delete", check=False, allow_empty_rc=(21, 2))
+        try:
+            run(f"iscsiadm -m node -T {iqn} -o delete", allow_empty_rc=(21, 2))
+        except GatherError as e:
+            log(f"     [ERROR] node-record delete failed: {e}")
+            ok = False
+    return ok
 
 
 def main():
@@ -310,6 +366,17 @@ def main():
                 kept.append((uuid, [f"device still mounted: {','.join(blocking)}"]))
                 continue
 
+        # Age gate: a target that only just became unreferenced may simply be
+        # mid-convergence (attach/detach in flight). Unknown age counts as too
+        # young — never as old enough.
+        age = get_target_failure_age_minutes(uuid, iqn)
+        if age is None:
+            kept.append((uuid, [f"age unknown, refusing to touch (< {MIN_AGE_MINUTES}m rule)"]))
+            continue
+        if age < MIN_AGE_MINUTES:
+            kept.append((uuid, [f"too recent ({age:.1f}m < {MIN_AGE_MINUTES}m)"]))
+            continue
+
         candidates.append((uuid, iqn, uuid in sessions))
 
     log("")
@@ -341,15 +408,21 @@ def main():
     log("")
     log(f"[ACTION] Cleaning up {len(candidates)} orphaned target(s)"
         f"{' (DRY RUN)' if DRY_RUN else ''}...")
+    failures = 0
     for uuid, iqn, has_sess in candidates:
         log(f"  -> {uuid}")
-        cleanup(iqn, has_sess)
+        if not cleanup(iqn, has_sess):
+            failures += 1
 
     log("")
     if DRY_RUN:
         log("[DONE] Dry run complete — nothing was modified. Set DRY_RUN=false to apply.")
-    else:
-        log(f"[DONE] Cleaned {len(candidates)} orphaned target(s).")
+        return 0
+    if failures:
+        log(f"[PARTIAL] {len(candidates) - failures}/{len(candidates)} cleaned, "
+            f"{failures} failed — see errors above.")
+        return 1
+    log(f"[DONE] Cleaned {len(candidates)} orphaned target(s).")
     return 0
 
 

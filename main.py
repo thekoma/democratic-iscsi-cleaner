@@ -45,6 +45,12 @@ STORAGE_NODE = os.getenv("STORAGE_NODE", "")
 MAX_DELETE_RATIO = float(os.getenv("MAX_DELETE_RATIO", "0.30"))
 # A session must have been failing for at least this long to be touched.
 MIN_AGE_MINUTES = int(os.getenv("MIN_AGE_MINUTES", "10"))
+# Bound for the journalctl kernel-log scan below (age-check). Without this,
+# `journalctl -k --grep` walks the *entire* on-disk journal (multi-GB,
+# multi-boot) for every candidate, which has repeatedly hung cleaner runs
+# for 6-28+ hours on knas (2026-08-30, 2026-08-31, 2026-09-02) without ever
+# deleting anything unsafe -- purely a performance bug, not a safety one.
+JOURNAL_LOOKBACK_HOURS = int(os.getenv("JOURNAL_LOOKBACK_HOURS", "48"))
 
 PVC_RE = re.compile(r"(pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 
@@ -230,7 +236,8 @@ def get_target_failure_age_minutes(uuid, iqn):
     ages = []
 
     first = run(
-        f"journalctl -k -o short-unix --no-pager --grep '{uuid}' | head -1",
+        f"journalctl -k -o short-unix --no-pager "
+        f"--since '-{JOURNAL_LOOKBACK_HOURS}h' --grep '{uuid}' | head -1",
         check=False, allow_empty_rc=(1,),
     )
     if first:

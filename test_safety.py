@@ -47,6 +47,7 @@ ACTIVE = [f"pvc-0000000{i}-1111-2222-3333-44444444444{i}" for i in range(1, 6)]
 ORPHAN = "pvc-99999999-1111-2222-3333-999999999999"
 
 DESTRUCTIVE = []
+AGE_CMDS = []
 
 
 def install_fakes(mod, *, sessions, node_records, zfs, lio, pvs, attached, mounts,
@@ -59,7 +60,9 @@ def install_fakes(mod, *, sessions, node_records, zfs, lio, pvs, attached, mount
                     raise mod.GatherError("nsenter: failed to execute zfs: No such file or directory")
                 return None
             return "\n".join(f"data/csi/iscsi/{u}" for u in zfs)
-        if command.startswith("journalctl") or command.startswith("stat -c"):
+        if command.startswith("sh -c ") and "stat -c" in command:
+            AGE_CMDS.append(command)
+        if command.startswith("journalctl") or (command.startswith("sh -c ") and "stat -c" in command):
             if age_minutes is None:
                 return ""
             import time
@@ -238,6 +241,27 @@ install_fakes(m, sessions=ACTIVE + [ORPHAN], node_records=ACTIVE + [ORPHAN],
 rc = m.main()
 check("unknown age: exits 0", rc == 0, f"rc={rc}")
 check("unknown age: NOT deleted", not DESTRUCTIVE, f"{len(DESTRUCTIVE)} cmds")
+
+
+# ---------------------------------------------------------------- TEST 13
+# REGRESSION (2026-10-30): on workers the kernel log never mentions the orphan
+# (the 'Unable to locate' lines land on the storage node), so the node-record
+# mtime is the only age source. It used to be a bare glob, expanded by the
+# CONTAINER shell before nsenter: no match, age unknown, orphans kept forever.
+print("\n=== TEST 13: worker orphan aged only by the node-record mtime ===")
+DESTRUCTIVE.clear(); AGE_CMDS.clear()
+m = load_main(dict(BASE_ENV, DRY_RUN="false", NODE_NAME="hactar.asgard.lan",
+                   STORAGE_NODE="knas.asgard.lan", MIN_AGE_MINUTES="10"))
+install_fakes(m, sessions=ACTIVE + [ORPHAN], node_records=ACTIVE + [ORPHAN],
+              zfs=[], lio=[], pvs=ACTIVE, attached=ACTIVE, mounts=[], age_minutes=600)
+rc = m.main()
+check("worker orphan: exits 0", rc == 0, f"rc={rc}")
+check("worker orphan: logged out + deleted", any(ORPHAN in c for c in DESTRUCTIVE), f"{DESTRUCTIVE}")
+check("worker orphan: no active target touched",
+      not any(a in c for c in DESTRUCTIVE for a in ACTIVE), f"{DESTRUCTIVE}")
+check("age probe runs in a host shell (sh -c, quoted glob)",
+      AGE_CMDS and all(c.startswith("sh -c '") and "/etc/iscsi/nodes/" in c
+                       and "/var/lib/iscsi/nodes/" in c for c in AGE_CMDS), f"{AGE_CMDS[:1]}")
 
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 62)

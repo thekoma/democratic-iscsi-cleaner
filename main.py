@@ -25,6 +25,7 @@ SAFETY MODEL (see iscsi-cleaner-rework-report.md in asgard-k8s):
 """
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -246,10 +247,18 @@ def get_target_failure_age_minutes(uuid, iqn):
         except (ValueError, IndexError):
             pass
 
-    mtime = run(
-        f"stat -c %Y /var/lib/iscsi/nodes/{iqn}/*  2>/dev/null | sort -n | head -1",
-        check=False, allow_empty_rc=(1,),
+    # Wrapped in `sh -c` on purpose: run() hands the string to a *container*
+    # shell before nsenter, so a bare glob/pipe here expands against the
+    # container filesystem (no /var/lib/iscsi there) and silently matches
+    # nothing. On workers the kernel log has no 'Unable to locate' lines (those
+    # land on the storage node), so this mtime is the only age source there.
+    # open-iscsi keeps records under /etc/iscsi (Debian/RHEL builds, nors) or
+    # /var/lib/iscsi (hactar, knas): check both.
+    script = (
+        f"stat -c %Y /etc/iscsi/nodes/{iqn}/* /var/lib/iscsi/nodes/{iqn}/* "
+        f"2>/dev/null | sort -n | head -1"
     )
+    mtime = run(f"sh -c {shlex.quote(script)}", check=False, allow_empty_rc=(1,))
     if mtime:
         try:
             ages.append((now - float(mtime.strip())) / 60.0)
